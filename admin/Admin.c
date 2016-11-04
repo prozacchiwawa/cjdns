@@ -211,7 +211,12 @@ int Admin_sendMessage(Dict* message, String* txid, struct Admin* adminPub)
     return 0;
 }
 
-static inline bool authValid(Dict* message, struct Message* messageBytes, struct Admin_pvt* admin)
+static inline bool authValid
+  (Dict* message,
+   String* txid,
+   struct Message* messageBytes,
+   struct Allocator* requestAlloc,
+   struct Admin_pvt* admin)
 {
     String* cookieStr = Dict_getString(message, String_CONST("cookie"));
     uint32_t cookie = (cookieStr != NULL) ? strtoll(cookieStr->bytes, NULL, 10) : 0;
@@ -234,8 +239,19 @@ static inline bool authValid(Dict* message, struct Message* messageBytes, struct
     uint8_t passAndCookie[64];
     snprintf((char*) passAndCookie, 64, "%s%u", admin->password->bytes, cookie);
     uint8_t hash[32];
+
     crypto_hash_sha256(hash, passAndCookie, CString_strlen((char*) passAndCookie));
     Hex_encode(hashPtr, 64, hash, 32);
+
+#if 0
+    String *error = String_printf
+        (requestAlloc,
+         "PW INPUT [%s] [%s]",
+         passAndCookie,
+         messageBytes->bytes);
+    Dict d = Dict_CONST(String_CONST("error"), String_OBJ(error), NULL);
+    Admin_sendMessage(&d, txid, &admin->pub);
+#endif
 
     crypto_hash_sha256(hash, messageBytes->bytes, messageBytes->length);
     Hex_encode(hashPtr, 64, hash, 32);
@@ -346,7 +362,7 @@ static void handleRequest(Dict* messageDict,
     String* auth = String_CONST("auth");
     bool authed = false;
     if (String_equals(query, auth)) {
-        if (!authValid(messageDict, message, admin)) {
+        if (!authValid(messageDict, txid, message, allocator, admin)) {
             Dict* d = Dict_new(allocator);
             Dict_putString(d, String_CONST("error"), String_CONST("Auth failed."), allocator);
             Admin_sendMessage(d, txid, &admin->pub);

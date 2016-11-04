@@ -179,15 +179,33 @@ static void initTunfd(Dict* args, void* vcontext, String* txid, struct Allocator
     Jmp_try(jmp) {
         int64_t* tunfd = Dict_getInt(args, String_CONST("tunfd"));
         int64_t* tuntype = Dict_getInt(args, String_CONST("type"));
+        struct Pipe* p;
+
         if (!tunfd || *tunfd < 0) {
-            String* error = String_printf(requestAlloc, "Invalid tunfd");
-            sendResponse(error, ctx->admin, txid, requestAlloc);
-            return;
+            String* desiredName = Dict_getString(args, String_CONST("pipe"));
+            if (!desiredName ||
+                !(p = Pipe_named
+                  (Pipe_PATH,
+                   desiredName->bytes,
+                   ctx->base,
+                   &jmp.handler,
+                   ctx->alloc))) {
+                String* error = String_printf(requestAlloc, "Invalid tunfd");
+                sendResponse(error, ctx->admin, txid, requestAlloc);
+                return;
+            }
+        } else {
+            int fileno = *tunfd;
+            p = Pipe_forFiles(fileno, fileno, ctx->base, &jmp.handler, ctx->alloc);
         }
-        int fileno = *tunfd;
-        int type = (*tuntype) ? *tuntype : FileNo_Type_NORMAL;
-        struct Pipe* p = Pipe_forFiles(fileno, fileno, ctx->base, &jmp.handler, ctx->alloc);
+
+        int type = (tuntype && *tuntype) ? *tuntype : FileNo_Type_NORMAL;
         p->logger = ctx->logger;
+
+        if (ctx->nc->tunAdapt->tunIf.connectedIf) {
+            Iface_unplumb(&ctx->nc->tunAdapt->tunIf, ctx->nc->tunAdapt->tunIf.connectedIf);
+        }
+
         if (type == FileNo_Type_ANDROID) {
             struct AndroidWrapper* aw = AndroidWrapper_new(ctx->alloc, ctx->logger);
             Iface_plumb(&aw->externalIf, &p->iface);
@@ -319,8 +337,9 @@ void Core_init(struct Allocator* alloc,
 
     Admin_registerFunction("Core_initTunfd", initTunfd, ctx, true,
         ((struct Admin_FunctionArg[]) {
-            { .name = "tunfd", .required = 1, .type = "Int" },
-            { .name = "type", .required = 0, .type = "Int" }
+            { .name = "tunfd", .required = 0, .type = "Int" },
+            { .name = "type", .required = 0, .type = "Int" },
+            { .name = "pipe", .required = 0, .type = "String" }
         }), admin);
 
     Admin_registerFunction("Core_nodeInfo", nodeInfo, ctx, false, NULL, admin);
