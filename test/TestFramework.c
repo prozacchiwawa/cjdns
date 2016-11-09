@@ -195,6 +195,7 @@ void TestFramework_linkNodes(struct TestFramework* client,
                                    String_CONST("abcdefg123"),
                                    NULL,
                                    NULL,
+                                   0,
                                    client->alloc);
     }
 }

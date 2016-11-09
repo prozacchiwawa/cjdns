@@ -48,7 +48,9 @@ static void beginConnection(Dict* args,
     int64_t* interfaceNumber = Dict_getInt(args, String_CONST("interfaceNumber"));
     uint32_t ifNum = (interfaceNumber) ? ((uint32_t) *interfaceNumber) : 0;
     String* peerName = Dict_getString(args, String_CONST("peerName"));
+    int64_t* holepunchNumber = Dict_getInt(args, String_CONST("holepunch"));
     String* error = NULL;
+    int holepunch = holepunchNumber && *holepunchNumber;
 
     Log_debug(ctx->logger, "Peering with [%s]", publicKey->bytes);
 
@@ -87,7 +89,7 @@ static void beginConnection(Dict* args,
         }
 
         int ret = InterfaceController_bootstrapPeer(
-            ctx->ic, ifNum, pkBytes, addr, password, login, peerName, ctx->alloc);
+            ctx->ic, ifNum, pkBytes, addr, password, login, peerName, holepunch, ctx->alloc);
 
         Allocator_free(tempAlloc);
 
@@ -217,6 +219,7 @@ void UDPInterface_admin_register(struct EventBase* base,
             { .name = "password", .required = 0, .type = "String" },
             { .name = "publicKey", .required = 1, .type = "String" },
             { .name = "address", .required = 1, .type = "String" },
-            { .name = "login", .required = 0, .type = "String" }
+            { .name = "login", .required = 0, .type = "String" },
+            { .name = "holepunch", .required = 0, .type = "Int" }
         }), admin);
 }

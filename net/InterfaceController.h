@@ -33,6 +33,8 @@ Linker_require("net/InterfaceController.c");
 
 enum InterfaceController_PeerState
 {
+    InterfaceController_PeerState_HOLEPUNCH = -3,
+
     /**
      * In state >= NEW, a valid packet has been received but it could still be a replay.
      * Or it's an outgoing connection so we don't care about authentication.
@@ -66,6 +68,7 @@ static inline char* InterfaceController_stateString(enum InterfaceController_Pee
         case InterfaceController_PeerState_ESTABLISHED: return "ESTABLISHED";
         case InterfaceController_PeerState_UNRESPONSIVE: return "UNRESPONSIVE";
         case InterfaceController_PeerState_UNAUTHENTICATED: return "UNAUTHENTICATED";
+        case InterfaceController_PeerState_HOLEPUNCH: return "HOLEPUNCH";
         default: return "INVALID";
     }
 }
@@ -152,6 +155,7 @@ int InterfaceController_bootstrapPeer(struct InterfaceController* ifc,
                                       String* password,
                                       String* login,
                                       String* displayName,
+                                      int holepunch,
                                       struct Allocator* alloc);
 
 #define InterfaceController_beaconState_newState_OFF    0

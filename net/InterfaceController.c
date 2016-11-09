@@ -35,6 +35,8 @@
 #include "wire/Message.h"
 #include "wire/Headers.h"
 
+#include <crypto_hash_sha256.h>
+
 /** After this number of milliseconds, a node will be regarded as unresponsive. */
 #define UNRESPONSIVE_AFTER_MILLISECONDS (20*1024)
 
@@ -497,9 +499,12 @@ static int closeInterface(struct Allocator_OnFreeJob* job)
 }
 
 /**
- * Expects [ struct LLAddress ][ beacon ]
+ * Expects [ struct LLAddress ][ trailer ][ beacon ]
  */
-static Iface_DEFUN handleBeacon(struct Message* msg, struct InterfaceController_Iface_pvt* ici)
+static Iface_DEFUN handleBeacon
+    (struct Message* msg,
+     const uint8_t* trailer,
+     struct InterfaceController_Iface_pvt* ici)
 {
     struct InterfaceController_pvt* ic = ici->ic;
     if (!ici->beaconState) {
@@ -556,7 +561,15 @@ static Iface_DEFUN handleBeacon(struct Message* msg, struct InterfaceController_
 
     String* beaconPass = String_newBinary(beacon.password, Headers_Beacon_PASSWORD_LEN, msg->alloc);
     int epIndex = Map_EndpointsBySockaddr_indexForKey(&lladdrInmsg, &ici->peerMap);
-    if (epIndex > -1) {
+
+    struct Peer* candidate =
+        epIndex > -1 ?
+        Identity_check((struct Peer*) ici->peerMap.values[epIndex]) :
+        NULL;
+
+    if (epIndex > -1 &&
+        candidate &&
+        candidate->state != InterfaceController_PeerState_HOLEPUNCH) {
         // The password might have changed!
         struct Peer* ep = ici->peerMap.values[epIndex];
         CryptoAuth_setAuth(beaconPass, NULL, ep->caSession);
@@ -565,11 +578,21 @@ static Iface_DEFUN handleBeacon(struct Message* msg, struct InterfaceController_
 
     struct Allocator* epAlloc = Allocator_child(ici->alloc);
     struct Peer* ep = Allocator_calloc(epAlloc, sizeof(struct Peer), 1);
-    struct Sockaddr* lladdr = Sockaddr_clone(lladdrInmsg, epAlloc);
     ep->alloc = epAlloc;
     ep->ici = ici;
+    int setIndex;
+    struct Sockaddr* lladdr;
+    if (trailer &&
+        candidate &&
+        candidate->state == InterfaceController_PeerState_HOLEPUNCH) {
+        lladdr = Sockaddr_fromBytes(trailer, Sockaddr_AF_INET, epAlloc);
+        uint16_t port = (trailer[4] << 8) | trailer[5];
+        Sockaddr_setPort(lladdr, port);
+    } else {
+        lladdr = Sockaddr_clone(lladdrInmsg, epAlloc);
+    }
     ep->lladdr = lladdr;
-    int setIndex = Map_EndpointsBySockaddr_put(&lladdr, &ep, &ici->peerMap);
+    setIndex = Map_EndpointsBySockaddr_put(&lladdr, &ep, &ici->peerMap);
     ep->handle = ici->peerMap.handles[setIndex];
     ep->isIncomingConnection = true;
     Bits_memcpy(&ep->addr, &addr, sizeof(struct Address));
@@ -631,6 +654,7 @@ static Iface_DEFUN handleUnexpectedIncoming(struct Message* msg,
     ep->peerLink = PeerLink_new(ic->eventBase, epAlloc);
     struct CryptoHeader* ch = (struct CryptoHeader*) msg->bytes;
     ep->caSession = CryptoAuth_newSession(ic->ca, epAlloc, ch->publicKey, true, "outer");
+
     if (CryptoAuth_decrypt(ep->caSession, msg)) {
         // If the first message is a dud, drop all state for this peer.
         // probably some random crap that wandered in the socket.
@@ -687,8 +711,30 @@ static Iface_DEFUN handleIncomingFromWire(struct Message* msg, struct Iface* add
         Log_debug(ici->ic->logger, "Incoming message from [%s]", printedAddr);
     }
 
+    // A beacon message is used for NAT busting.  If that's been done here
+    // then the last few bytes of the message will have been appended by the
+    // cnc server.
+    //
+    // If that's the case, then the remote public key will be repeated in the
+    // final bytes.
+    uint8_t trailer[64] = {0};
+    int natBust = 0;
+
+    if (msg->length >= (int32_t)(sizeof(trailer) + Headers_Beacon_SIZE)) {
+        uint8_t hash[32];
+        Bits_memcpy(trailer, msg->bytes + msg->length - sizeof(trailer), sizeof(trailer));
+        crypto_hash_sha256(hash, msg->bytes, msg->length - sizeof(trailer));
+        if (!Bits_memcmp(hash, trailer + sizeof(trailer) - sizeof(hash), sizeof(hash))) {
+            Log_debug(ici->ic->logger, "Trailer found");
+            // Ensure backstop termination
+            trailer[sizeof(trailer)-1] = 0;
+            msg->length -= sizeof(trailer);
+            natBust = 1;
+        }
+    }
+
     if (lladdr->flags & Sockaddr_flags_BCAST) {
-        return handleBeacon(msg, ici);
+        return handleBeacon(msg, natBust ? trailer : NULL, ici);
     }
 
     int epIndex = Map_EndpointsBySockaddr_indexForKey(&lladdr, &ici->peerMap);
@@ -813,6 +859,7 @@ int InterfaceController_bootstrapPeer(struct InterfaceController* ifc,
                                       String* password,
                                       String* login,
                                       String* user,
+                                      int holepunch,
                                       struct Allocator* alloc)
 {
     struct InterfaceController_pvt* ic = Identity_check((struct InterfaceController_pvt*) ifc);
@@ -879,6 +926,11 @@ int InterfaceController_bootstrapPeer(struct InterfaceController* ifc,
         String* addrStr = Address_toString(&ep->addr, tempAlloc);
         Log_info(ic->logger, "Adding peer [%s] from bootstrapPeer()", addrStr->bytes);
         Allocator_free(tempAlloc);
+    }
+
+    if (holepunch) {
+        ep->state = InterfaceController_PeerState_HOLEPUNCH;
+        ici->beaconState = InterfaceController_beaconState_newState_SEND;
     }
 
     // We can't just add the node directly to the routing table because we do not know
