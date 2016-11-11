@@ -788,7 +788,13 @@ static void sendBeacon(struct InterfaceController_Iface_pvt* ici, struct Allocat
 
     Log_debug(ici->ic->logger, "sendBeacon(%s)", ici->name->bytes);
 
+    struct Sockaddr sa = {
+        .addrLen = Sockaddr_OVERHEAD,
+        .flags = Sockaddr_flags_BCAST
+    };
+
     struct Message* msg = Message_new(0, 128, tempAlloc);
+
     Message_push(msg, &ici->ic->beacon, Headers_Beacon_SIZE, NULL);
 
     if (Defined(Log_DEBUG)) {
@@ -796,10 +802,6 @@ static void sendBeacon(struct InterfaceController_Iface_pvt* ici, struct Allocat
         Log_debug(ici->ic->logger, "SEND BEACON CONTENT[%s]", content);
     }
 
-    struct Sockaddr sa = {
-        .addrLen = Sockaddr_OVERHEAD,
-        .flags = Sockaddr_flags_BCAST
-    };
     Message_push(msg, &sa, Sockaddr_OVERHEAD, NULL);
 
     Iface_send(&ici->pub.addrIf, msg);
@@ -921,22 +923,39 @@ int InterfaceController_bootstrapPeer(struct InterfaceController* ifc,
     ep->timeOfLastMessage =
         Time_currentTimeMilliseconds(ic->eventBase) - ic->pingAfterMilliseconds - 1;
 
+    struct Allocator* tempAlloc = Allocator_child(alloc);
     if (Defined(Log_INFO)) {
-        struct Allocator* tempAlloc = Allocator_child(alloc);
         String* addrStr = Address_toString(&ep->addr, tempAlloc);
         Log_info(ic->logger, "Adding peer [%s] from bootstrapPeer()", addrStr->bytes);
-        Allocator_free(tempAlloc);
     }
 
     if (holepunch) {
         ep->state = InterfaceController_PeerState_HOLEPUNCH;
         ici->beaconState = InterfaceController_beaconState_newState_SEND;
+
+        uint8_t keyIfDebug[56];
+        struct Message* msg = Message_new(0, 128, tempAlloc);
+
+        Message_push(msg, &ici->ic->beacon, Headers_Beacon_SIZE, NULL);
+        Message_push(msg, ep->lladdr, ep->lladdr->addrLen, NULL);
+
+        Base32_encode(keyIfDebug, 56, ici->ic->beacon.publicKey, 32);
+        char* content = Hex_print(msg->bytes, msg->length, tempAlloc);
+        Log_debug
+            (ici->ic->logger,
+             "SEND TEASER BEACON KEY [%s.k] CONTENT[%s]",
+             keyIfDebug,
+             content);
+
+        Iface_send(&ep->ici->pub.addrIf, msg);
+    } else {
+        // We can't just add the node directly to the routing table because we do not know
+        // the version. We'll send it a switch ping and when it responds, we will know it's
+        // key (if we don't already) and version number.
+        sendPing(ep);
     }
 
-    // We can't just add the node directly to the routing table because we do not know
-    // the version. We'll send it a switch ping and when it responds, we will know it's
-    // key (if we don't already) and version number.
-    sendPing(ep);
+    Allocator_free(tempAlloc);
 
     return 0;
 }
