@@ -585,9 +585,11 @@ static Iface_DEFUN handleBeacon
     if (trailer &&
         candidate &&
         candidate->state == InterfaceController_PeerState_HOLEPUNCH) {
-        lladdr = Sockaddr_fromBytes(trailer, Sockaddr_AF_INET, epAlloc);
-        uint16_t port = (trailer[4] << 8) | trailer[5];
-        Sockaddr_setPort(lladdr, port);
+        struct Sockaddr_storage sa;
+        if (Sockaddr_parse(trailer, &sa)) {
+            return NULL;
+        }
+        lladdr = Sockaddr_clone(&sa.addr, epAlloc);
     } else {
         lladdr = Sockaddr_clone(lladdrInmsg, epAlloc);
     }
@@ -718,23 +720,27 @@ static Iface_DEFUN handleIncomingFromWire(struct Message* msg, struct Iface* add
     // If that's the case, then the remote public key will be repeated in the
     // final bytes.
     uint8_t trailer[64] = {0};
-    int natBust = 0;
+
+    Message_shift(msg, -lladdr->addrLen, NULL);
 
     if (msg->length >= (int32_t)(sizeof(trailer) + Headers_Beacon_SIZE)) {
         uint8_t hash[32];
         Bits_memcpy(trailer, msg->bytes + msg->length - sizeof(trailer), sizeof(trailer));
         crypto_hash_sha256(hash, msg->bytes, msg->length - sizeof(trailer));
         if (!Bits_memcmp(hash, trailer + sizeof(trailer) - sizeof(hash), sizeof(hash))) {
-            Log_debug(ici->ic->logger, "Trailer found");
-            // Ensure backstop termination
-            trailer[sizeof(trailer)-1] = 0;
+            trailer[31] = 0;
+            Log_debug(ici->ic->logger, "Trailer found -> %s", trailer);
             msg->length -= sizeof(trailer);
-            natBust = 1;
+            Message_shift(msg, lladdr->addrLen, NULL);
+
+            return handleBeacon(msg, trailer, ici);
         }
     }
 
+    Message_shift(msg, lladdr->addrLen, NULL);
+
     if (lladdr->flags & Sockaddr_flags_BCAST) {
-        return handleBeacon(msg, natBust ? trailer : NULL, ici);
+        return handleBeacon(msg, NULL, ici);
     }
 
     int epIndex = Map_EndpointsBySockaddr_indexForKey(&lladdr, &ici->peerMap);
