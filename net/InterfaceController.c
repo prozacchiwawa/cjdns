@@ -567,11 +567,24 @@ static Iface_DEFUN handleBeacon
         Identity_check((struct Peer*) ici->peerMap.values[epIndex]) :
         NULL;
 
-    if (epIndex > -1 &&
-        candidate &&
-        candidate->state != InterfaceController_PeerState_HOLEPUNCH) {
+    if (epIndex > -1 && candidate) {
         // The password might have changed!
         struct Peer* ep = ici->peerMap.values[epIndex];
+        if (trailer &&
+            candidate->state == InterfaceController_PeerState_HOLEPUNCH) {
+            struct Sockaddr_storage sa;
+            Sockaddr_parse((const char *)trailer, &sa);
+            ep->caSession = CryptoAuth_newSession
+                (ic->ca, ep->alloc, addr.key, false, "outer");
+            if (ep->lladdr->addrLen != sa.addr.addrLen ||
+                Bits_memcmp(ep->lladdr, &sa.addr, sa.addr.addrLen)) {
+                ep->lladdr = Sockaddr_clone(&sa.addr, ep->alloc);
+                lladdrInmsg = Sockaddr_clone(&sa.addr, ep->alloc);
+            }
+            Map_EndpointsBySockaddr_remove(epIndex, &ici->peerMap);
+            Map_EndpointsBySockaddr_put(&lladdrInmsg, &ep, &ici->peerMap);
+            Log_info(ic->logger, "Reset tunnel to %s", Sockaddr_print(ep->lladdr, msg->alloc));
+        }
         CryptoAuth_setAuth(beaconPass, NULL, ep->caSession);
         return NULL;
     }

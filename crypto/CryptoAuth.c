@@ -552,7 +552,14 @@ static Gcc_USE_RET int decryptHandshake(struct CryptoAuth_Session_pvt* session,
 
     Assert_true(knowHerKey(session));
     if (Bits_memcmp(session->pub.herPublicKey, header->publicKey, 32)) {
-        cryptoAuthDebug0(session, "DROP a packet with different public key than this session");
+        uint8_t hashOurs[65], hashTheirs[65];
+        printHexPubKey(hashOurs, session->pub.herPublicKey);
+        printHexPubKey(hashTheirs, header->publicKey);
+        cryptoAuthDebug
+            (session,
+             "DROP a packet with different public key than this session want [%s.k] have [%s.k]",
+             hashOurs,
+             hashTheirs);
         return -1;
     }
 
